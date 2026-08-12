@@ -20,13 +20,13 @@ type rawResponse struct {
 	CurrentUnits *CurrentUnits   `json:"current_units,omitempty"`
 
 	Hourly      json.RawMessage `json:"hourly,omitempty"`
-	HourlyUnits *HourlyUnits    `json:"hourly_units,omitempty"`
+	HourlyUnits json.RawMessage `json:"hourly_units,omitempty"`
 
-	Minutely15      json.RawMessage  `json:"minutely_15,omitempty"`
-	Minutely15Units *Minutely15Units `json:"minutely_15_units,omitempty"`
+	Minutely15      json.RawMessage `json:"minutely_15,omitempty"`
+	Minutely15Units json.RawMessage `json:"minutely_15_units,omitempty"`
 
 	Daily      json.RawMessage `json:"daily,omitempty"`
-	DailyUnits *DailyUnits     `json:"daily_units,omitempty"`
+	DailyUnits json.RawMessage `json:"daily_units,omitempty"`
 }
 
 // rawCurrent represents the raw current weather data.
@@ -71,7 +71,7 @@ type rawMinutely15 struct {
 }
 
 // parseWeatherResponse parses the API response into a Weather struct.
-func parseWeatherResponse(body []byte) (*Weather, error) {
+func parseWeatherResponse(body []byte, models []string) (*Weather, error) {
 	var raw rawResponse
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil, err
@@ -97,9 +97,45 @@ func parseWeatherResponse(body []byte) (*Weather, error) {
 		UTCOffsetSeconds:     raw.UTCOffsetSeconds,
 		GenerationTimeMs:     raw.GenerationTimeMs,
 		CurrentUnits:         raw.CurrentUnits,
-		HourlyUnits:          raw.HourlyUnits,
-		Minutely15Units:      raw.Minutely15Units,
-		DailyUnits:           raw.DailyUnits,
+		PrimaryModel:         firstModel(models),
+	}
+
+	// Parse units after model-aware normalization. The API returns one unit
+	// object per model when model-specific cadence fields are returned, while
+	// the public API intentionally exposes one request-level unit object.
+	var err error
+	if len(raw.HourlyUnits) > 0 {
+		selected, selectErr := selectModelFields(raw.HourlyUnits, models, weather.PrimaryModel)
+		if selectErr != nil {
+			return nil, selectErr
+		}
+		var units *HourlyUnits
+		if err = json.Unmarshal(selected, &units); err != nil {
+			return nil, err
+		}
+		weather.HourlyUnits = units
+	}
+	if len(raw.Minutely15Units) > 0 {
+		selected, selectErr := selectModelFields(raw.Minutely15Units, models, weather.PrimaryModel)
+		if selectErr != nil {
+			return nil, selectErr
+		}
+		var units *Minutely15Units
+		if err = json.Unmarshal(selected, &units); err != nil {
+			return nil, err
+		}
+		weather.Minutely15Units = units
+	}
+	if len(raw.DailyUnits) > 0 {
+		selected, selectErr := selectModelFields(raw.DailyUnits, models, weather.PrimaryModel)
+		if selectErr != nil {
+			return nil, selectErr
+		}
+		var units *DailyUnits
+		if err = json.Unmarshal(selected, &units); err != nil {
+			return nil, err
+		}
+		weather.DailyUnits = units
 	}
 
 	// Parse current weather
@@ -113,32 +149,238 @@ func parseWeatherResponse(body []byte) (*Weather, error) {
 
 	// Parse hourly data
 	if len(raw.Hourly) > 0 {
-		hourly, err := parseHourly(raw.Hourly, loc)
+		hourly, byModel, err := parseHourlySection(raw.Hourly, loc, models, weather.PrimaryModel)
 		if err != nil {
 			return nil, err
 		}
 		weather.Hourly = hourly
+		weather.HourlyByModel = byModel
 	}
 
 	// Parse 15-minutely data
 	if len(raw.Minutely15) > 0 {
-		minutely15, err := parseMinutely15(raw.Minutely15, loc)
+		minutely15, byModel, err := parseMinutely15Section(raw.Minutely15, loc, models, weather.PrimaryModel)
 		if err != nil {
 			return nil, err
 		}
 		weather.Minutely15 = minutely15
+		weather.Minutely15ByModel = byModel
 	}
 
 	// Parse daily data
 	if len(raw.Daily) > 0 {
-		daily, err := parseDaily(raw.Daily, loc)
+		daily, byModel, err := parseDailySection(raw.Daily, loc, models, weather.PrimaryModel)
 		if err != nil {
 			return nil, err
 		}
 		weather.Daily = daily
+		weather.DailyByModel = byModel
 	}
 
 	return weather, nil
+}
+
+// firstModel returns the first exactly non-empty model identifier in request
+// order. It intentionally does not trim, normalize, or otherwise alter it.
+func firstModel(models []string) string {
+	for _, model := range models {
+		if model != "" {
+			return model
+		}
+	}
+	return ""
+}
+
+func effectiveModels(models []string) []string {
+	if len(models) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(models))
+	effective := make([]string, 0, len(models))
+	for _, model := range models {
+		if model == "" {
+			continue
+		}
+		if _, ok := seen[model]; ok {
+			continue
+		}
+		seen[model] = struct{}{}
+		effective = append(effective, model)
+	}
+	return effective
+}
+
+// splitModelFields separates model-suffixed object fields from fields that
+// are shared by all requested models. Only exact model identifiers supplied by
+// the request are considered.
+func splitModelFields(data json.RawMessage, models []string) (json.RawMessage, map[string]json.RawMessage, error) {
+	effective := effectiveModels(models)
+	if len(effective) == 0 {
+		return data, nil, nil
+	}
+
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return nil, nil, err
+	}
+	if fields == nil { // JSON null
+		return data, nil, nil
+	}
+
+	sharedFields := make(map[string]json.RawMessage)
+	modelFields := make(map[string]map[string]json.RawMessage)
+	for key, value := range fields {
+		matchedModel := ""
+		matchedSuffixLength := 0
+		for _, model := range effective {
+			suffix := "_" + model
+			if len(key) <= len(suffix) || len(suffix) <= matchedSuffixLength {
+				continue
+			}
+			if key[len(key)-len(suffix):] == suffix {
+				matchedModel = model
+				matchedSuffixLength = len(suffix)
+			}
+		}
+
+		if matchedModel == "" {
+			sharedFields[key] = value
+			continue
+		}
+		if modelFields[matchedModel] == nil {
+			modelFields[matchedModel] = make(map[string]json.RawMessage)
+		}
+		baseKey := key[:len(key)-matchedSuffixLength]
+		modelFields[matchedModel][baseKey] = value
+	}
+
+	if len(modelFields) == 0 {
+		return data, nil, nil
+	}
+
+	shared, err := json.Marshal(sharedFields)
+	if err != nil {
+		return nil, nil, err
+	}
+	byModel := make(map[string]json.RawMessage, len(modelFields))
+	for _, model := range effective {
+		fieldsForModel, ok := modelFields[model]
+		if !ok {
+			continue
+		}
+		merged := make(map[string]json.RawMessage, len(sharedFields)+len(fieldsForModel))
+		for key, value := range sharedFields {
+			merged[key] = value
+		}
+		for key, value := range fieldsForModel {
+			merged[key] = value
+		}
+		normalized, err := json.Marshal(merged)
+		if err != nil {
+			return nil, nil, err
+		}
+		byModel[model] = normalized
+	}
+	return shared, byModel, nil
+}
+
+func selectModelFields(data json.RawMessage, models []string, primary string) (json.RawMessage, error) {
+	shared, byModel, err := splitModelFields(data, models)
+	if err != nil {
+		return nil, err
+	}
+	if selected, ok := byModel[primary]; ok {
+		return selected, nil
+	}
+	return shared, nil
+}
+
+func parseHourlySection(data json.RawMessage, loc *time.Location, models []string, primary string) (*HourlyData, map[string]*HourlyData, error) {
+	shared, byModel, err := splitModelFields(data, models)
+	if err != nil {
+		return nil, nil, err
+	}
+	if byModel == nil {
+		hourly, err := parseHourly(shared, loc)
+		return hourly, nil, err
+	}
+
+	parsed := make(map[string]*HourlyData, len(byModel))
+	for _, model := range effectiveModels(models) {
+		normalized, ok := byModel[model]
+		if !ok {
+			continue
+		}
+		hourly, err := parseHourly(normalized, loc)
+		if err != nil {
+			return nil, nil, err
+		}
+		parsed[model] = hourly
+	}
+	if hourly, ok := parsed[primary]; ok {
+		return hourly, parsed, nil
+	}
+	hourly, err := parseHourly(shared, loc)
+	return hourly, parsed, err
+}
+
+func parseMinutely15Section(data json.RawMessage, loc *time.Location, models []string, primary string) (*Minutely15Data, map[string]*Minutely15Data, error) {
+	shared, byModel, err := splitModelFields(data, models)
+	if err != nil {
+		return nil, nil, err
+	}
+	if byModel == nil {
+		minutely15, err := parseMinutely15(shared, loc)
+		return minutely15, nil, err
+	}
+
+	parsed := make(map[string]*Minutely15Data, len(byModel))
+	for _, model := range effectiveModels(models) {
+		normalized, ok := byModel[model]
+		if !ok {
+			continue
+		}
+		minutely15, err := parseMinutely15(normalized, loc)
+		if err != nil {
+			return nil, nil, err
+		}
+		parsed[model] = minutely15
+	}
+	if minutely15, ok := parsed[primary]; ok {
+		return minutely15, parsed, nil
+	}
+	minutely15, err := parseMinutely15(shared, loc)
+	return minutely15, parsed, err
+}
+
+func parseDailySection(data json.RawMessage, loc *time.Location, models []string, primary string) (*DailyData, map[string]*DailyData, error) {
+	shared, byModel, err := splitModelFields(data, models)
+	if err != nil {
+		return nil, nil, err
+	}
+	if byModel == nil {
+		daily, err := parseDaily(shared, loc)
+		return daily, nil, err
+	}
+
+	parsed := make(map[string]*DailyData, len(byModel))
+	for _, model := range effectiveModels(models) {
+		normalized, ok := byModel[model]
+		if !ok {
+			continue
+		}
+		daily, err := parseDaily(normalized, loc)
+		if err != nil {
+			return nil, nil, err
+		}
+		parsed[model] = daily
+	}
+	if daily, ok := parsed[primary]; ok {
+		return daily, parsed, nil
+	}
+	daily, err := parseDaily(shared, loc)
+	return daily, parsed, err
 }
 
 // parseCurrent parses current weather data.

@@ -99,7 +99,7 @@ func (c *Client) Forecast(ctx context.Context, req *ForecastRequest) (*Weather, 
 		return nil, err
 	}
 
-	return parseWeatherResponse(body)
+	return parseWeatherResponse(body, req.models)
 }
 
 // Historical retrieves historical weather data for the given request.
@@ -111,7 +111,7 @@ func (c *Client) Historical(ctx context.Context, req *HistoricalRequest) (*Weath
 		return nil, err
 	}
 
-	return parseWeatherResponse(body)
+	return parseWeatherResponse(body, nil)
 }
 
 // doRequest performs an HTTP GET request and returns the response body.

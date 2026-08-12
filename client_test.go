@@ -16,9 +16,11 @@ import (
 type mockHTTPClient struct {
 	response *http.Response
 	err      error
+	request  *http.Request
 }
 
 func (m *mockHTTPClient) Do(req *http.Request) (*http.Response, error) {
+	m.request = req
 	return m.response, m.err
 }
 
@@ -50,6 +52,30 @@ func TestClientForecast(t *testing.T) {
 	assert.InDelta(t, 52.52, weather.Latitude, 0.01)
 	require.NotNil(t, weather.Hourly)
 	assert.Len(t, weather.Hourly.Temperature2m, 3)
+}
+
+func TestClientForecastMultipleModelsPreservesRequestOrder(t *testing.T) {
+	data, err := os.ReadFile("testdata/forecast_multiple_models.json")
+	require.NoError(t, err)
+
+	mock := &mockHTTPClient{response: newMockResponse(http.StatusOK, data)}
+	client := NewClient(WithHTTPClient(mock))
+
+	req, err := NewForecastRequest(52.52, 13.41)
+	require.NoError(t, err)
+	req.WithModels("gfs_global", "ecmwf_ifs").
+		WithHourly(HourlyTemperature2m).
+		WithMinutely15(Minutely15Temperature2m).
+		WithDaily(DailyTemperature2mMax, DailySunrise)
+
+	weather, err := client.Forecast(context.Background(), req)
+	require.NoError(t, err)
+	require.NotNil(t, mock.request)
+	assert.Equal(t, "gfs_global,ecmwf_ifs", mock.request.URL.Query().Get("models"))
+	assert.Equal(t, "gfs_global", weather.PrimaryModel)
+	assert.Same(t, weather.HourlyByModel["gfs_global"], weather.Hourly)
+	assert.Same(t, weather.Minutely15ByModel["gfs_global"], weather.Minutely15)
+	assert.Same(t, weather.DailyByModel["gfs_global"], weather.Daily)
 }
 
 func TestClientHistorical(t *testing.T) {

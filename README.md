@@ -140,6 +140,35 @@ for i, t := range weather.Minutely15.Times {
 }
 ```
 
+### Multiple Models
+
+```go
+req, err := omgo.NewForecastRequest(52.52, 13.41)
+if err != nil {
+    // handle error
+}
+req.WithModels("ecmwf_ifs", "gfs_global").
+    WithHourly(omgo.HourlyTemperature2m).
+    WithDaily(omgo.DailyTemperature2mMax)
+
+weather, err := client.Forecast(context.Background(), req)
+if err != nil {
+    // handle error
+}
+ecmwf := weather.HourlyByModel["ecmwf_ifs"]
+gfs := weather.HourlyByModel["gfs_global"]
+
+// Existing fields select the first requested model when that model has data.
+fmt.Println(weather.PrimaryModel)       // ecmwf_ifs
+fmt.Println(weather.Hourly == ecmwf)    // true
+fmt.Println(ecmwf.Temperature2m[0], gfs.Temperature2m[0])
+```
+
+Use the `*ByModel` maps when comparing deterministic model forecasts. The
+existing `Hourly`, `Minutely15`, and `Daily` fields remain compatibility views
+of the first explicitly requested model whenever that model has data for the
+cadence.
+
 ### Historical Data
 
 ```go
