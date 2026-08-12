@@ -245,6 +245,156 @@ func TestSplitModelFieldsOnlyMatchesRequestedModelsAndPreservesInput(t *testing.
 	assert.JSONEq(t, `[2]`, string(fields["temperature_2m_gfs_global"]))
 }
 
+func TestParseEnsembleResponse(t *testing.T) {
+	data, err := os.ReadFile("testdata/ensemble.json")
+	require.NoError(t, err)
+	weather, err := parseEnsembleResponse(data, "icon_seamless")
+	require.NoError(t, err)
+	assert.InDelta(t, 52.52, weather.Latitude, 0.01)
+	assert.InDelta(t, 13.41, weather.Longitude, 0.01)
+	assert.Equal(t, 38.0, weather.Elevation)
+	assert.Equal(t, "icon_seamless", weather.Model)
+	assert.Equal(t, "Europe/Berlin", weather.Timezone)
+	assert.Equal(t, "CET", weather.TimezoneAbbreviation)
+	assert.Equal(t, 3600, weather.UTCOffsetSeconds)
+	assert.Equal(t, 1.5, weather.GenerationTimeMs)
+	require.Len(t, weather.HourlyByMember, 3)
+	assert.Equal(t, []float64{2, 2.1, 2.2}, weather.HourlyByMember["member00"].Temperature2m)
+	assert.Equal(t, []float64{3, 3.1, 3.2}, weather.HourlyByMember["member01"].Temperature2m)
+	assert.Nil(t, weather.HourlyByMember["member02"].Precipitation)
+	for _, member := range weather.HourlyByMember {
+		assert.Equal(t, []int{0, 0, 0}, member.IsDay)
+		assert.Len(t, member.Times, 3)
+	}
+	require.Len(t, weather.DailyByMember, 3)
+	assert.Nil(t, weather.DailyByMember["member01"].Temperature2mMax)
+	assert.Equal(t, []float64{1, 2}, weather.DailyByMember["member01"].PrecipitationSum)
+	assert.Nil(t, weather.DailyByMember["member00"].PrecipitationSum)
+	assert.Equal(t, []float64{7, 8}, weather.DailyByMember["member02"].Temperature2mMax)
+	for _, member := range weather.DailyByMember {
+		assert.Len(t, member.Times, 2)
+		assert.Len(t, member.Sunrise, 2)
+		assert.Len(t, member.Sunset, 2)
+		assert.Equal(t, []float64{29700, 29880}, member.DaylightDuration)
+	}
+	require.NotNil(t, weather.HourlyUnits)
+	assert.Equal(t, "°C", weather.HourlyUnits.Temperature2m)
+	require.NotNil(t, weather.DailyUnits)
+	assert.Equal(t, "°C", weather.DailyUnits.Temperature2mMax)
+	loc, err := time.LoadLocation("Europe/Berlin")
+	require.NoError(t, err)
+	assert.Equal(t, time.Date(2024, 1, 15, 0, 0, 0, 0, loc), weather.HourlyByMember["member00"].Times[0])
+	assert.Equal(t, time.Date(2024, 1, 15, 0, 0, 0, 0, loc), weather.DailyByMember["member02"].Times[0])
+	assert.Equal(t, time.Date(2024, 1, 15, 8, 15, 0, 0, loc), weather.DailyByMember["member01"].Sunrise[0])
+}
+
+func TestSplitMemberFields(t *testing.T) {
+	data := json.RawMessage(`{"time":["2024-01-01T00:00"],"is_day":[0],"temperature_2m":[1],"temperature_2m_member01":[2],"rain_member03":[3]}`)
+	wantData := append(json.RawMessage(nil), data...)
+	members, err := splitMemberFields(data, map[string]bool{"is_day": true})
+	require.NoError(t, err)
+	assert.Equal(t, wantData, data)
+	require.Len(t, members, 3)
+	var member1 map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(members["member01"], &member1))
+	assert.JSONEq(t, `[0]`, string(member1["is_day"]))
+	assert.JSONEq(t, `[2]`, string(member1["temperature_2m"]))
+	var member3 map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(members["member03"], &member3))
+	assert.NotContains(t, member3, "temperature_2m")
+
+	sharedOnly, err := splitMemberFields(json.RawMessage(`{"time":[],"is_day":[]}`), map[string]bool{"is_day": true})
+	require.NoError(t, err)
+	assert.Contains(t, sharedOnly, "member00")
+	invariantOnly, err := splitMemberFields(json.RawMessage(`{"is_day":[]}`), map[string]bool{"is_day": true})
+	require.NoError(t, err)
+	assert.Contains(t, invariantOnly, "member00")
+	timeOnly, err := splitMemberFields(json.RawMessage(`{"time":[]}`), map[string]bool{"is_day": true})
+	require.NoError(t, err)
+	assert.Nil(t, timeOnly)
+	empty, err := splitMemberFields(json.RawMessage(`{}`), map[string]bool{"is_day": true})
+	require.NoError(t, err)
+	assert.Nil(t, empty)
+
+	for _, key := range []string{"metric_member", "metric_memberx", "metric_member01_extra", "_member01", "metric_member١"} {
+		members, err := splitMemberFields(json.RawMessage(`{"`+key+`":[]}`), nil)
+		require.NoError(t, err)
+		assert.Contains(t, members, "member00", key)
+	}
+	for _, input := range []json.RawMessage{json.RawMessage(`[]`), json.RawMessage(`"value"`), json.RawMessage(`{`)} {
+		_, err := splitMemberFields(input, nil)
+		assert.Error(t, err)
+	}
+}
+
+func TestParseEnsembleResponseRejectsAmbiguityAndNulls(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		body     string
+		contains []string
+	}{
+		{"normalized collision", `{"hourly":{"time":[],"temperature_2m":[],"temperature_2m_member00":[]}}`, []string{"hourly", "member00", "temperature_2m"}},
+		{"shared collision", `{"hourly":{"time":[],"time_member01":[]}}`, []string{"hourly", "member01", "time"}},
+		{"null series", `{"hourly":{"time":[],"temperature_2m":null}}`, []string{"hourly", "member00", "temperature_2m", "null"}},
+		{"null element", `{"hourly":{"time":[],"temperature_2m":[1,null]}}`, []string{"hourly", "member00", "temperature_2m", "element 1"}},
+		{"top-level null", `null`, []string{"ensemble response", "JSON object"}},
+		{"top-level array", `[]`, []string{"ensemble response"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := parseEnsembleResponse([]byte(test.body), "icon")
+			require.Error(t, err)
+			for _, part := range test.contains {
+				assert.Contains(t, err.Error(), part)
+			}
+		})
+	}
+
+	weather, err := parseEnsembleResponse([]byte(`{"hourly":null,"hourly_units":null,"daily":null,"daily_units":null}`), "icon")
+	require.NoError(t, err)
+	assert.Nil(t, weather.HourlyByMember)
+	assert.Nil(t, weather.HourlyUnits)
+	assert.Nil(t, weather.DailyByMember)
+	assert.Nil(t, weather.DailyUnits)
+
+	_, err = parseEnsembleResponse([]byte(`{"hourly":{"time":[],"temperature_2m_member07":[1,null]}}`), "icon")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "hourly member member07")
+	assert.Contains(t, err.Error(), "temperature_2m")
+	assert.Contains(t, err.Error(), "element 1")
+	_, err = parseEnsembleResponse([]byte(`{"hourly":{"time":["not-a-time"],"temperature_2m_member07":[1]}}`), "icon")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "parsing hourly member member07")
+}
+
+func TestParseEnsembleResponseSharedOnlyUnitsAndTimezoneFallback(t *testing.T) {
+	body := []byte(`{
+		"timezone":"Not/A_Timezone",
+		"hourly_units":{"temperature_2m":"base","temperature_2m_member01":"ignored"},
+		"daily_units":{"temperature_2m_max":"base","temperature_2m_max_member01":"ignored"},
+		"hourly":{"is_day":[1]},
+		"daily":{"sunrise":["2024-01-15T08:15"]}
+	}`)
+	weather, err := parseEnsembleResponse(body, " exact model ")
+	require.NoError(t, err)
+	assert.Equal(t, " exact model ", weather.Model)
+	require.NotNil(t, weather.HourlyUnits)
+	assert.Equal(t, "base", weather.HourlyUnits.Temperature2m)
+	require.NotNil(t, weather.DailyUnits)
+	assert.Equal(t, "base", weather.DailyUnits.Temperature2mMax)
+	require.Contains(t, weather.HourlyByMember, "member00")
+	assert.Equal(t, []int{1}, weather.HourlyByMember["member00"].IsDay)
+	require.Contains(t, weather.DailyByMember, "member00")
+	assert.Equal(t, time.Date(2024, 1, 15, 8, 15, 0, 0, time.UTC), weather.DailyByMember["member00"].Sunrise[0])
+}
+
+func TestSplitMemberFieldsReportsCollisionsDeterministically(t *testing.T) {
+	data := json.RawMessage(`{"time":[],"time_member01":[],"is_day":[],"is_day_member01":[]}`)
+	for i := 0; i < 20; i++ {
+		_, err := splitMemberFields(data, map[string]bool{"is_day": true})
+		require.EqualError(t, err, `member member01 field "is_day" collides with a shared field`)
+	}
+}
+
 func TestFirstModelUsesFirstExactlyNonEmptyIdentifier(t *testing.T) {
 	models := []string{"", " ", "gfs_global", "gfs_global"}
 	want := append([]string(nil), models...)

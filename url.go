@@ -10,7 +10,74 @@ import (
 const (
 	forecastBaseURL   = "https://api.open-meteo.com/v1/forecast"
 	historicalBaseURL = "https://archive-api.open-meteo.com/v1/archive"
+	ensembleBaseURL   = "https://ensemble-api.open-meteo.com/v1/ensemble"
 )
+
+// buildURL builds the URL for an ensemble request.
+func (r *EnsembleRequest) buildURL(baseURL, apiKey string) string {
+	params := url.Values{}
+	params.Set("latitude", formatFloat(r.location.Latitude))
+	params.Set("longitude", formatFloat(r.location.Longitude))
+	if r.location.Elevation != nil {
+		params.Set("elevation", formatFloat(*r.location.Elevation))
+	}
+	params.Set("models", r.model)
+	if len(r.hourlyMetrics) > 0 {
+		params.Set("hourly", joinMetrics(r.hourlyMetrics))
+	}
+	if len(r.dailyMetrics) > 0 {
+		params.Set("daily", joinMetrics(r.dailyMetrics))
+	}
+	if r.temperatureUnit != "" {
+		params.Set("temperature_unit", string(r.temperatureUnit))
+	}
+	if r.windSpeedUnit != "" {
+		params.Set("wind_speed_unit", string(r.windSpeedUnit))
+	}
+	if r.precipitationUnit != "" {
+		params.Set("precipitation_unit", string(r.precipitationUnit))
+	}
+	if r.timezone != "" {
+		params.Set("timezone", r.timezone)
+	}
+	if r.forecastDays != nil {
+		params.Set("forecast_days", strconv.Itoa(*r.forecastDays))
+	}
+	if r.pastDays != nil {
+		params.Set("past_days", strconv.Itoa(*r.pastDays))
+	}
+	if r.forecastHours != nil {
+		params.Set("forecast_hours", strconv.Itoa(*r.forecastHours))
+	}
+	if r.pastHours != nil {
+		params.Set("past_hours", strconv.Itoa(*r.pastHours))
+	}
+	if r.startDate != "" {
+		params.Set("start_date", r.startDate)
+	}
+	if r.endDate != "" {
+		params.Set("end_date", r.endDate)
+	}
+	if r.startHour != "" {
+		params.Set("start_hour", r.startHour)
+	}
+	if r.endHour != "" {
+		params.Set("end_hour", r.endHour)
+	}
+	if r.cellSelection != "" {
+		params.Set("cell_selection", string(r.cellSelection))
+	}
+	if r.tilt != nil {
+		params.Set("tilt", formatFloat(*r.tilt))
+	}
+	if r.azimuth != nil {
+		params.Set("azimuth", formatFloat(*r.azimuth))
+	}
+	if apiKey != "" {
+		params.Set("apikey", apiKey)
+	}
+	return baseURL + "?" + params.Encode()
+}
 
 // buildURL builds the URL for a forecast request.
 func (r *ForecastRequest) buildURL(baseURL, apiKey string) string {

@@ -141,6 +141,41 @@ func TestIntegrationForecastMultipleModels(t *testing.T) {
 	require.NotNil(t, weather.DailyUnits)
 }
 
+func TestIntegrationEnsemble(t *testing.T) {
+	client := omgo.NewClient()
+	req, err := omgo.NewEnsembleRequest(52.3738, 4.8910, "icon_seamless")
+	require.NoError(t, err)
+	req.WithHourly(omgo.HourlyTemperature2m).WithDaily(omgo.DailyTemperature2mMax).
+		WithTimezone("Europe/Amsterdam").WithForecastDays(1)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	weather, err := client.Ensemble(ctx, req)
+	require.NoError(t, err)
+	assert.InDelta(t, 52.37, weather.Latitude, 0.1)
+	assert.InDelta(t, 4.89, weather.Longitude, 0.1)
+	assert.Equal(t, "Europe/Amsterdam", weather.Timezone)
+	assert.NotEmpty(t, weather.TimezoneAbbreviation)
+	assert.Equal(t, "icon_seamless", weather.Model)
+	require.NotNil(t, weather.HourlyUnits)
+	assert.Equal(t, "°C", weather.HourlyUnits.Temperature2m)
+	require.NotNil(t, weather.DailyUnits)
+	assert.Equal(t, "°C", weather.DailyUnits.Temperature2mMax)
+	require.Contains(t, weather.HourlyByMember, "member00")
+	require.Contains(t, weather.HourlyByMember, "member01")
+	require.Contains(t, weather.DailyByMember, "member00")
+	require.Contains(t, weather.DailyByMember, "member01")
+	require.GreaterOrEqual(t, len(weather.HourlyByMember), 2)
+	require.GreaterOrEqual(t, len(weather.DailyByMember), 2)
+	for _, member := range weather.HourlyByMember {
+		assert.NotEmpty(t, member.Times)
+		assert.Len(t, member.Times, len(member.Temperature2m))
+	}
+	for _, member := range weather.DailyByMember {
+		assert.NotEmpty(t, member.Times)
+		assert.Len(t, member.Times, len(member.Temperature2mMax))
+	}
+}
+
 func TestIntegrationCurrentWeather(t *testing.T) {
 	client := omgo.NewClient()
 
