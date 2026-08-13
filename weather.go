@@ -16,10 +16,10 @@ type Weather struct {
 	// Generation time for performance monitoring
 	GenerationTimeMs float64 `json:"generationtime_ms"`
 
-	// PrimaryModel identifies the first explicitly requested non-empty model.
-	// When that model has suffixed data for a cadence, it backs the corresponding
-	// Hourly, Minutely15, or Daily compatibility field. PrimaryModel is empty for
-	// requests without an explicit non-empty model.
+	// PrimaryModel identifies the first explicitly requested non-empty model when
+	// the response contains model-suffixed data. It is empty when no model was
+	// requested or when a multi-model request collapsed to an unattributed,
+	// unsuffixed response. A single explicit model remains unambiguous.
 	PrimaryModel string `json:"-"`
 
 	// Current weather conditions

@@ -177,6 +177,16 @@ func parseWeatherResponse(body []byte, models []string) (*Weather, error) {
 		weather.DailyByModel = byModel
 	}
 
+	// When multiple models were requested but the API returned only unsuffixed
+	// cadence fields, it does not identify which requested model survived. Do
+	// not attribute those compatibility fields to the first requested model.
+	if len(effectiveModels(models)) > 1 &&
+		weather.HourlyByModel == nil &&
+		weather.Minutely15ByModel == nil &&
+		weather.DailyByModel == nil {
+		weather.PrimaryModel = ""
+	}
+
 	return weather, nil
 }
 

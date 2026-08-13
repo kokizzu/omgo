@@ -116,11 +116,11 @@ func TestParseMultipleModelForecast(t *testing.T) {
 	require.NotNil(t, gfsHourly)
 	require.NotNil(t, ecmwfHourly)
 	assert.Equal(t, []float64{2.8, 2.6, 2.4}, gfsHourly.Temperature2m)
-	assert.Equal(t, []float64{2.5, 2.3, 2.1}, ecmwfHourly.Temperature2m)
+	assert.Equal(t, []float64{2.5, 2.3, 0}, ecmwfHourly.Temperature2m)
 	assert.Equal(t, []float64{0.2, 0.0, 0.1}, gfsHourly.Precipitation)
-	assert.Nil(t, gfsHourly.RelativeHumidity2m)
+	assert.Equal(t, []float64{0, 0, 0}, gfsHourly.RelativeHumidity2m)
 	assert.Equal(t, []float64{85, 86, 87}, ecmwfHourly.RelativeHumidity2m)
-	assert.Nil(t, ecmwfHourly.Precipitation)
+	assert.Equal(t, []float64{0, 0, 0}, ecmwfHourly.Precipitation)
 	assert.Len(t, gfsHourly.Times, 3)
 	assert.Len(t, ecmwfHourly.Times, 3)
 	assert.Same(t, gfsHourly, weather.Hourly)
@@ -148,9 +148,11 @@ func TestParseMultipleModelForecast(t *testing.T) {
 	assert.Equal(t, time.Date(2024, 1, 15, 8, 15, 0, 0, loc), weather.DailyByModel["ecmwf_ifs"].Sunrise[0])
 	assert.Equal(t, time.Date(2024, 1, 17, 16, 39, 0, 0, loc), weather.DailyByModel["gfs_global"].Sunset[2])
 	assert.Equal(t, []float64{5.8, 6.4, 5.1}, weather.DailyByModel["gfs_global"].Temperature2mMax)
-	assert.Equal(t, []float64{5.2, 6.1, 4.8}, weather.DailyByModel["ecmwf_ifs"].Temperature2mMax)
+	assert.Equal(t, []float64{5.2, 6.1, 0}, weather.DailyByModel["ecmwf_ifs"].Temperature2mMax)
 	assert.Equal(t, []WeatherCode{2, 61, 3}, weather.DailyByModel["gfs_global"].WeatherCode)
-	assert.Equal(t, []WeatherCode{3, 61, 45}, weather.DailyByModel["ecmwf_ifs"].WeatherCode)
+	assert.Equal(t, []WeatherCode{3, 61, ClearSky}, weather.DailyByModel["ecmwf_ifs"].WeatherCode)
+	assert.True(t, weather.DailyByModel["ecmwf_ifs"].Sunrise[2].IsZero())
+	assert.True(t, weather.DailyByModel["ecmwf_ifs"].Sunset[2].IsZero())
 	assert.Len(t, weather.DailyByModel["gfs_global"].Times, 3)
 	assert.Len(t, weather.DailyByModel["ecmwf_ifs"].Times, 3)
 	assert.Same(t, weather.DailyByModel["gfs_global"], weather.Daily)
@@ -158,6 +160,7 @@ func TestParseMultipleModelForecast(t *testing.T) {
 	require.NotNil(t, weather.HourlyUnits)
 	assert.Equal(t, "°C", weather.HourlyUnits.Temperature2m)
 	assert.Equal(t, "mm", weather.HourlyUnits.Precipitation)
+	assert.Equal(t, "undefined", weather.HourlyUnits.RelativeHumidity2m)
 	require.NotNil(t, weather.Minutely15Units)
 	assert.Equal(t, "°C", weather.Minutely15Units.Temperature2m)
 	assert.Equal(t, "mm", weather.Minutely15Units.Precipitation)
@@ -165,6 +168,29 @@ func TestParseMultipleModelForecast(t *testing.T) {
 	assert.Equal(t, "°C", weather.DailyUnits.Temperature2mMax)
 	assert.Equal(t, "wmo code", weather.DailyUnits.WeatherCode)
 	assert.Equal(t, "iso8601", weather.DailyUnits.Sunrise)
+
+	ecmwfPrimary, err := parseWeatherResponse(data, []string{"ecmwf_ifs", "gfs_global"})
+	require.NoError(t, err)
+	assert.Equal(t, "ecmwf_ifs", ecmwfPrimary.PrimaryModel)
+	assert.Same(t, ecmwfPrimary.HourlyByModel["ecmwf_ifs"], ecmwfPrimary.Hourly)
+	assert.Equal(t, "%", ecmwfPrimary.HourlyUnits.RelativeHumidity2m)
+	assert.Equal(t, "undefined", ecmwfPrimary.HourlyUnits.Precipitation)
+}
+
+func TestParseMultipleModelsUnsuffixedResponseHasNoPrimaryAttribution(t *testing.T) {
+	data := json.RawMessage(`{
+		"timezone":"UTC",
+		"hourly":{"time":["2024-01-15T00:00"],"temperature_2m":[29.1]},
+		"hourly_units":{"time":"iso8601","temperature_2m":"°C"}
+	}`)
+
+	weather, err := parseWeatherResponse(data, []string{"icon_d2", "gfs_global"})
+	require.NoError(t, err)
+
+	assert.Empty(t, weather.PrimaryModel)
+	assert.Nil(t, weather.HourlyByModel)
+	require.NotNil(t, weather.Hourly)
+	assert.Equal(t, []float64{29.1}, weather.Hourly.Temperature2m)
 }
 
 func TestSplitModelFields(t *testing.T) {
