@@ -285,8 +285,9 @@ func TestParseEnsembleResponse(t *testing.T) {
 	assert.Equal(t, 3600, weather.UTCOffsetSeconds)
 	assert.Equal(t, 1.5, weather.GenerationTimeMs)
 	require.Len(t, weather.HourlyByMember, 3)
-	assert.Equal(t, []float64{2, 2.1, 2.2}, weather.HourlyByMember["member00"].Temperature2m)
-	assert.Equal(t, []float64{3, 3.1, 3.2}, weather.HourlyByMember["member01"].Temperature2m)
+	assert.Equal(t, []float64{2, 2.1, 0}, weather.HourlyByMember["member00"].Temperature2m)
+	assert.Equal(t, []float64{3, 3.1, 0}, weather.HourlyByMember["member01"].Temperature2m)
+	assert.Equal(t, []float64{0, 0, 0}, weather.HourlyByMember["member01"].Precipitation)
 	assert.Nil(t, weather.HourlyByMember["member02"].Precipitation)
 	for _, member := range weather.HourlyByMember {
 		assert.Equal(t, []int{0, 0, 0}, member.IsDay)
@@ -295,8 +296,9 @@ func TestParseEnsembleResponse(t *testing.T) {
 	require.Len(t, weather.DailyByMember, 3)
 	assert.Nil(t, weather.DailyByMember["member01"].Temperature2mMax)
 	assert.Equal(t, []float64{1, 2}, weather.DailyByMember["member01"].PrecipitationSum)
+	assert.Equal(t, []float64{0, 0}, weather.DailyByMember["member01"].PrecipitationProbabilityMax)
 	assert.Nil(t, weather.DailyByMember["member00"].PrecipitationSum)
-	assert.Equal(t, []float64{7, 8}, weather.DailyByMember["member02"].Temperature2mMax)
+	assert.Equal(t, []float64{7, 0}, weather.DailyByMember["member02"].Temperature2mMax)
 	for _, member := range weather.DailyByMember {
 		assert.Len(t, member.Times, 2)
 		assert.Len(t, member.Sunrise, 2)
@@ -307,6 +309,7 @@ func TestParseEnsembleResponse(t *testing.T) {
 	assert.Equal(t, "°C", weather.HourlyUnits.Temperature2m)
 	require.NotNil(t, weather.DailyUnits)
 	assert.Equal(t, "°C", weather.DailyUnits.Temperature2mMax)
+	assert.Equal(t, "undefined", weather.DailyUnits.PrecipitationProbabilityMax)
 	loc, err := time.LoadLocation("Europe/Berlin")
 	require.NoError(t, err)
 	assert.Equal(t, time.Date(2024, 1, 15, 0, 0, 0, 0, loc), weather.HourlyByMember["member00"].Times[0])
@@ -353,7 +356,7 @@ func TestSplitMemberFields(t *testing.T) {
 	}
 }
 
-func TestParseEnsembleResponseRejectsAmbiguityAndNulls(t *testing.T) {
+func TestParseEnsembleResponseRejectsAmbiguityAndInvalidTopLevel(t *testing.T) {
 	for _, test := range []struct {
 		name     string
 		body     string
@@ -361,8 +364,6 @@ func TestParseEnsembleResponseRejectsAmbiguityAndNulls(t *testing.T) {
 	}{
 		{"normalized collision", `{"hourly":{"time":[],"temperature_2m":[],"temperature_2m_member00":[]}}`, []string{"hourly", "member00", "temperature_2m"}},
 		{"shared collision", `{"hourly":{"time":[],"time_member01":[]}}`, []string{"hourly", "member01", "time"}},
-		{"null series", `{"hourly":{"time":[],"temperature_2m":null}}`, []string{"hourly", "member00", "temperature_2m", "null"}},
-		{"null element", `{"hourly":{"time":[],"temperature_2m":[1,null]}}`, []string{"hourly", "member00", "temperature_2m", "element 1"}},
 		{"top-level null", `null`, []string{"ensemble response", "JSON object"}},
 		{"top-level array", `[]`, []string{"ensemble response"}},
 	} {
@@ -382,14 +383,33 @@ func TestParseEnsembleResponseRejectsAmbiguityAndNulls(t *testing.T) {
 	assert.Nil(t, weather.DailyByMember)
 	assert.Nil(t, weather.DailyUnits)
 
-	_, err = parseEnsembleResponse([]byte(`{"hourly":{"time":[],"temperature_2m_member07":[1,null]}}`), "icon")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "hourly member member07")
-	assert.Contains(t, err.Error(), "temperature_2m")
-	assert.Contains(t, err.Error(), "element 1")
 	_, err = parseEnsembleResponse([]byte(`{"hourly":{"time":["not-a-time"],"temperature_2m_member07":[1]}}`), "icon")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "parsing hourly member member07")
+}
+
+func TestParseEnsembleResponseUsesLibraryNullSemantics(t *testing.T) {
+	body := []byte(`{
+		"timezone":"UTC",
+		"hourly":{
+			"time":["2024-01-15T00:00","2024-01-15T01:00","2024-01-15T02:00"],
+			"temperature_2m":[1.5,null,null],
+			"temperature_2m_member01":[null,null,null],
+			"precipitation":null
+		},
+		"daily":{
+			"time":["2024-01-15"],
+			"precipitation_probability_max":[null]
+		}
+	}`)
+
+	weather, err := parseEnsembleResponse(body, "icon_eu")
+	require.NoError(t, err)
+
+	assert.Equal(t, []float64{1.5, 0, 0}, weather.HourlyByMember["member00"].Temperature2m)
+	assert.Equal(t, []float64{0, 0, 0}, weather.HourlyByMember["member01"].Temperature2m)
+	assert.Nil(t, weather.HourlyByMember["member00"].Precipitation)
+	assert.Equal(t, []float64{0}, weather.DailyByMember["member00"].PrecipitationProbabilityMax)
 }
 
 func TestParseEnsembleResponseSharedOnlyUnitsAndTimezoneFallback(t *testing.T) {

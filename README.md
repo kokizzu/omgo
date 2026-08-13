@@ -208,8 +208,9 @@ fmt.Println(member0.Temperature2m[0], member1.Temperature2m[0])
 model, and hourly and daily members are discovered independently. Calculated
 fields such as `is_day`, sunrise, sunset, and daylight duration are shared with
 each normalized member. This first Ensemble API surface accepts one model per
-request. Responses with null cadence values return an error because the typed
-metric slices are non-nullable.
+request. As with other omgo responses, unavailable values returned as null are
+decoded as zero values by the existing non-nullable typed slices; a field whose
+entire JSON value is null remains a nil slice.
 
 ### Historical Data
 

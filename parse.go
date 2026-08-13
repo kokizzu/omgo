@@ -582,9 +582,6 @@ func parseEnsembleHourly(data json.RawMessage, loc *time.Location) (map[string]*
 	}
 	parsed := make(map[string]*HourlyData, len(members))
 	for _, member := range sortedRawKeys(members) {
-		if err := rejectNullCadenceValues("hourly", member, members[member]); err != nil {
-			return nil, err
-		}
 		hourly, err := parseHourly(members[member], loc)
 		if err != nil {
 			return nil, fmt.Errorf("parsing hourly member %s: %w", member, err)
@@ -604,9 +601,6 @@ func parseEnsembleDaily(data json.RawMessage, loc *time.Location) (map[string]*D
 	}
 	parsed := make(map[string]*DailyData, len(members))
 	for _, member := range sortedRawKeys(members) {
-		if err := rejectNullCadenceValues("daily", member, members[member]); err != nil {
-			return nil, err
-		}
 		daily, err := parseDaily(members[member], loc)
 		if err != nil {
 			return nil, fmt.Errorf("parsing daily member %s: %w", member, err)
@@ -694,29 +688,6 @@ func memberSuffix(key string) (member, base string, matched bool) {
 		}
 	}
 	return "member" + digits, key[:i], true
-}
-
-func rejectNullCadenceValues(cadence, member string, normalized json.RawMessage) error {
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(normalized, &fields); err != nil {
-		return fmt.Errorf("validating %s member %s: %w", cadence, member, err)
-	}
-	for _, field := range sortedRawKeys(fields) {
-		value := fields[field]
-		if strings.TrimSpace(string(value)) == "null" {
-			return fmt.Errorf("%s member %s field %q is null", cadence, member, field)
-		}
-		var elements []json.RawMessage
-		if err := json.Unmarshal(value, &elements); err != nil {
-			continue
-		}
-		for i, element := range elements {
-			if strings.TrimSpace(string(element)) == "null" {
-				return fmt.Errorf("%s member %s field %q element %d is null", cadence, member, field, i)
-			}
-		}
-	}
-	return nil
 }
 
 func sortedRawKeys[V any](m map[string]V) []string {
