@@ -96,6 +96,51 @@ func TestIntegrationForecastHourlyAndDaily(t *testing.T) {
 	}
 }
 
+func TestIntegrationForecastMultipleModels(t *testing.T) {
+	client := omgo.NewClient()
+
+	req, err := omgo.NewForecastRequest(52.3738, 4.8910)
+	require.NoError(t, err)
+	req.WithModels("ecmwf_ifs", "gfs_global").
+		WithHourly(omgo.HourlyTemperature2m).
+		WithMinutely15(omgo.Minutely15Temperature2m).
+		WithDaily(omgo.DailyTemperature2mMax, omgo.DailySunrise).
+		WithTimezone("Europe/Amsterdam").
+		WithForecastDays(2)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	weather, err := client.Forecast(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, "ecmwf_ifs", weather.PrimaryModel)
+
+	for _, model := range []string{"ecmwf_ifs", "gfs_global"} {
+		hourly, ok := weather.HourlyByModel[model]
+		require.True(t, ok)
+		assert.NotEmpty(t, hourly.Times)
+		assert.Len(t, hourly.Times, len(hourly.Temperature2m))
+
+		minutely15, ok := weather.Minutely15ByModel[model]
+		require.True(t, ok)
+		assert.NotEmpty(t, minutely15.Times)
+		assert.Len(t, minutely15.Times, len(minutely15.Temperature2m))
+
+		daily, ok := weather.DailyByModel[model]
+		require.True(t, ok)
+		assert.NotEmpty(t, daily.Times)
+		assert.Len(t, daily.Times, len(daily.Temperature2mMax))
+		assert.Len(t, daily.Times, len(daily.Sunrise))
+	}
+
+	assert.Same(t, weather.HourlyByModel["ecmwf_ifs"], weather.Hourly)
+	assert.Same(t, weather.Minutely15ByModel["ecmwf_ifs"], weather.Minutely15)
+	assert.Same(t, weather.DailyByModel["ecmwf_ifs"], weather.Daily)
+	require.NotNil(t, weather.HourlyUnits)
+	require.NotNil(t, weather.Minutely15Units)
+	require.NotNil(t, weather.DailyUnits)
+}
+
 func TestIntegrationCurrentWeather(t *testing.T) {
 	client := omgo.NewClient()
 

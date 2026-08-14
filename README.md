@@ -140,6 +140,45 @@ for i, t := range weather.Minutely15.Times {
 }
 ```
 
+### Multiple Models
+
+```go
+req, err := omgo.NewForecastRequest(52.52, 13.41)
+if err != nil {
+    // handle error
+}
+req.WithModels("ecmwf_ifs", "gfs_global").
+    WithHourly(omgo.HourlyTemperature2m).
+    WithDaily(omgo.DailyTemperature2mMax)
+
+weather, err := client.Forecast(context.Background(), req)
+if err != nil {
+    // handle error
+}
+ecmwf, hasECMWF := weather.HourlyByModel["ecmwf_ifs"]
+gfs, hasGFS := weather.HourlyByModel["gfs_global"]
+if hasECMWF && hasGFS {
+    fmt.Println(ecmwf.Temperature2m[0], gfs.Temperature2m[0])
+}
+
+// Existing fields select the first requested model when it can be identified.
+fmt.Println(weather.PrimaryModel) // ecmwf_ifs
+```
+
+Use the `*ByModel` maps when comparing deterministic model forecasts. The
+existing `Hourly`, `Minutely15`, and `Daily` fields remain compatibility views
+of the first explicitly requested model whenever that model has data for the
+cadence. If a model is outside its coverage area, Open-Meteo may collapse the
+response to unsuffixed fields. The `*ByModel` maps are then nil,
+`PrimaryModel` is empty, and the compatibility fields contain the surviving
+model's unattributed data.
+
+Open-Meteo uses nulls for unavailable variables and shorter model horizons.
+The library's existing non-nullable typed slices decode those values as zero
+(and null timestamps as zero `time.Time` values), rather than truncating the
+series. Unit fields describe `PrimaryModel` only and may be `"undefined"` for
+unsupported model-variable combinations.
+
 ### Historical Data
 
 ```go
