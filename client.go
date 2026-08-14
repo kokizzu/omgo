@@ -19,6 +19,7 @@ type HTTPClient interface {
 type Client struct {
 	forecastURL   string
 	historicalURL string
+	ensembleURL   string
 	httpClient    HTTPClient
 	userAgent     string
 	apiKey        string
@@ -44,6 +45,7 @@ func NewClient(opts ...Option) *Client {
 	c := &Client{
 		forecastURL:   forecastBaseURL,
 		historicalURL: historicalBaseURL,
+		ensembleURL:   ensembleBaseURL,
 		httpClient:    defaultHTTPClient,
 		userAgent:     DefaultUserAgent,
 	}
@@ -67,6 +69,13 @@ func WithHistoricalURL(url string) Option {
 	}
 }
 
+// WithEnsembleURL sets a custom base URL for the Ensemble API.
+func WithEnsembleURL(url string) Option {
+	return func(c *Client) {
+		c.ensembleURL = url
+	}
+}
+
 // WithHTTPClient sets a custom HTTP client.
 func WithHTTPClient(hc HTTPClient) Option {
 	return func(c *Client) {
@@ -82,8 +91,8 @@ func WithUserAgent(ua string) Option {
 }
 
 // WithAPIKey sets the API key for commercial access.
-// Note: When using an API key, you should also set custom URLs
-// with the "customer-" prefix using WithForecastURL/WithHistoricalURL.
+// Note: callers must set the appropriate customer-prefixed endpoint for each
+// API they use; supplying a key does not change endpoints automatically.
 func WithAPIKey(key string) Option {
 	return func(c *Client) {
 		c.apiKey = key
@@ -112,6 +121,16 @@ func (c *Client) Historical(ctx context.Context, req *HistoricalRequest) (*Weath
 	}
 
 	return parseWeatherResponse(body, nil)
+}
+
+// Ensemble retrieves ensemble forecast data for one model.
+func (c *Client) Ensemble(ctx context.Context, req *EnsembleRequest) (*EnsembleWeather, error) {
+	url := req.buildURL(c.ensembleURL, c.apiKey)
+	body, err := c.doRequest(ctx, url)
+	if err != nil {
+		return nil, err
+	}
+	return parseEnsembleResponse(body, req.model)
 }
 
 // doRequest performs an HTTP GET request and returns the response body.

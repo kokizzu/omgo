@@ -199,3 +199,68 @@ func TestMetricsDeduplication(t *testing.T) {
 	// Should be deduplicated and sorted
 	assert.Equal(t, "precipitation,temperature_2m,wind_speed_10m", params.Get("hourly"))
 }
+
+func TestEnsembleRequestURLAndValidation(t *testing.T) {
+	_, err := NewEnsembleRequest(52.52, 13.41, "")
+	require.ErrorContains(t, err, "model is required")
+	_, err = NewEnsembleRequest(52.52, 13.41, "icon_seamless,gfs_seamless")
+	require.ErrorContains(t, err, "exactly one model is supported")
+	_, err = NewEnsembleRequest(91, 13.41, "icon_seamless")
+	require.ErrorContains(t, err, "latitude")
+
+	req, err := NewEnsembleRequest(52.52, 13.41, " custom model ")
+	require.NoError(t, err)
+	hourlyMetrics := []HourlyMetric{HourlyTemperature2m, HourlyPrecipitation, HourlyTemperature2m}
+	dailyMetrics := []DailyMetric{DailySunset, DailyTemperature2mMax, DailySunset}
+	wantHourlyMetrics := append([]HourlyMetric(nil), hourlyMetrics...)
+	wantDailyMetrics := append([]DailyMetric(nil), dailyMetrics...)
+	req.WithLocation(req.location.WithElevation(44)).
+		WithHourly(hourlyMetrics...).
+		WithDaily(dailyMetrics...).
+		WithTemperatureUnit(Fahrenheit).WithWindSpeedUnit(MilesPerHour).
+		WithPrecipitationUnit(Inches).WithTimezone("Europe/Berlin").
+		WithForecastDays(0).WithPastDays(-1).WithForecastHours(0).WithPastHours(-2).
+		WithDateRange("2024-01-01", "2024-01-02").WithHourRange("2024-01-01T00:00", "2024-01-02T00:00").
+		WithCellSelection(CellSelectionNearest).WithTilt(45).WithAzimuth(180)
+	parsed, err := url.Parse(req.buildURL("https://example.test/ensemble", "key"))
+	require.NoError(t, err)
+	assert.Equal(t, wantHourlyMetrics, hourlyMetrics)
+	assert.Equal(t, wantDailyMetrics, dailyMetrics)
+	assert.Equal(t, wantHourlyMetrics, req.hourlyMetrics)
+	assert.Equal(t, wantDailyMetrics, req.dailyMetrics)
+	q := parsed.Query()
+	assert.Equal(t, "52.52", q.Get("latitude"))
+	assert.Equal(t, "13.41", q.Get("longitude"))
+	assert.Equal(t, "44", q.Get("elevation"))
+	require.Len(t, q["models"], 1)
+	assert.Equal(t, " custom model ", q.Get("models"))
+	assert.Equal(t, "precipitation,temperature_2m", q.Get("hourly"))
+	assert.Equal(t, "sunset,temperature_2m_max", q.Get("daily"))
+	assert.Equal(t, "fahrenheit", q.Get("temperature_unit"))
+	assert.Equal(t, "mph", q.Get("wind_speed_unit"))
+	assert.Equal(t, "inch", q.Get("precipitation_unit"))
+	assert.Equal(t, "Europe/Berlin", q.Get("timezone"))
+	assert.Equal(t, "0", q.Get("forecast_days"))
+	assert.Equal(t, "-1", q.Get("past_days"))
+	assert.Equal(t, "0", q.Get("forecast_hours"))
+	assert.Equal(t, "-2", q.Get("past_hours"))
+	assert.Equal(t, "2024-01-01", q.Get("start_date"))
+	assert.Equal(t, "2024-01-02", q.Get("end_date"))
+	assert.Equal(t, "2024-01-01T00:00", q.Get("start_hour"))
+	assert.Equal(t, "2024-01-02T00:00", q.Get("end_hour"))
+	assert.Equal(t, "nearest", q.Get("cell_selection"))
+	assert.Equal(t, "45", q.Get("tilt"))
+	assert.Equal(t, "180", q.Get("azimuth"))
+	assert.Equal(t, "key", q.Get("apikey"))
+	assert.Equal(t, "https://example.test/ensemble", parsed.Scheme+"://"+parsed.Host+parsed.Path)
+
+	bare, err := NewEnsembleRequest(1, 2, "icon_seamless")
+	require.NoError(t, err)
+	bareQ, err := url.Parse(bare.buildURL("https://example.test", ""))
+	require.NoError(t, err)
+	assert.False(t, bareQ.Query().Has("forecast_days"))
+	assert.False(t, bareQ.Query().Has("forecast_hours"))
+	assert.False(t, bareQ.Query().Has("past_days"))
+	assert.False(t, bareQ.Query().Has("past_hours"))
+	assert.False(t, bareQ.Query().Has("apikey"))
+}

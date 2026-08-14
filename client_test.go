@@ -141,7 +141,53 @@ func TestNewClientDefaults(t *testing.T) {
 
 	assert.Equal(t, forecastBaseURL, client.forecastURL)
 	assert.Equal(t, historicalBaseURL, client.historicalURL)
+	assert.Equal(t, ensembleBaseURL, client.ensembleURL)
 	assert.Equal(t, DefaultUserAgent, client.userAgent)
 	assert.Empty(t, client.apiKey)
 	assert.NotNil(t, client.httpClient)
+}
+
+func TestClientEnsemble(t *testing.T) {
+	data, err := os.ReadFile("testdata/ensemble.json")
+	require.NoError(t, err)
+	mock := &mockHTTPClient{response: newMockResponse(http.StatusOK, data)}
+	client := NewClient(WithHTTPClient(mock), WithEnsembleURL("https://ensemble.example.test/v1/ensemble"), WithAPIKey("key"), WithUserAgent("test-agent"))
+	req, err := NewEnsembleRequest(52.52, 13.41, "icon_seamless")
+	require.NoError(t, err)
+	req.WithHourly(HourlyTemperature2m)
+	weather, err := client.Ensemble(context.Background(), req)
+	require.NoError(t, err)
+	assert.Equal(t, "icon_seamless", weather.Model)
+	assert.Contains(t, weather.HourlyByMember, "member01")
+	require.NotNil(t, mock.request)
+	assert.Equal(t, http.MethodGet, mock.request.Method)
+	assert.Equal(t, "ensemble.example.test", mock.request.URL.Host)
+	assert.Equal(t, "/v1/ensemble", mock.request.URL.Path)
+	assert.Equal(t, "icon_seamless", mock.request.URL.Query().Get("models"))
+	assert.Equal(t, "key", mock.request.URL.Query().Get("apikey"))
+	assert.Equal(t, "test-agent", mock.request.Header.Get("User-Agent"))
+}
+
+func TestClientEnsembleAPIError(t *testing.T) {
+	mock := &mockHTTPClient{response: newMockResponse(http.StatusBadRequest, []byte(`{"error":true,"reason":"bad ensemble"}`))}
+	client := NewClient(WithHTTPClient(mock))
+	req, err := NewEnsembleRequest(52.52, 13.41, "icon_seamless")
+	require.NoError(t, err)
+	_, err = client.Ensemble(context.Background(), req)
+	var apiErr *APIError
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, http.StatusBadRequest, apiErr.StatusCode)
+	assert.Equal(t, "bad ensemble", apiErr.Reason)
+}
+
+func TestEnsembleClientOptions(t *testing.T) {
+	ensembleOnly := NewClient(WithEnsembleURL("ensemble"))
+	assert.Equal(t, forecastBaseURL, ensembleOnly.forecastURL)
+	assert.Equal(t, historicalBaseURL, ensembleOnly.historicalURL)
+	assert.Equal(t, "ensemble", ensembleOnly.ensembleURL)
+
+	otherEndpoints := NewClient(WithForecastURL("forecast"), WithHistoricalURL("historical"))
+	assert.Equal(t, "forecast", otherEndpoints.forecastURL)
+	assert.Equal(t, "historical", otherEndpoints.historicalURL)
+	assert.Equal(t, ensembleBaseURL, otherEndpoints.ensembleURL)
 }

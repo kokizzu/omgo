@@ -2,6 +2,149 @@ package omgo
 
 import "fmt"
 
+// EnsembleRequest represents a request to the Ensemble API. It supports one
+// ensemble model per request; create separate requests to compare models.
+type EnsembleRequest struct {
+	location Location
+	model    string
+
+	hourlyMetrics []HourlyMetric
+	dailyMetrics  []DailyMetric
+
+	temperatureUnit   TemperatureUnit
+	windSpeedUnit     WindSpeedUnit
+	precipitationUnit PrecipitationUnit
+
+	timezone      string
+	forecastDays  *int
+	pastDays      *int
+	forecastHours *int
+	pastHours     *int
+
+	startDate string
+	endDate   string
+	startHour string
+	endHour   string
+
+	cellSelection CellSelection
+	tilt          *float64
+	azimuth       *float64
+}
+
+// NewEnsembleRequest creates a request for one Ensemble API model.
+func NewEnsembleRequest(lat, lon float64, model string) (*EnsembleRequest, error) {
+	loc, err := NewLocation(lat, lon)
+	if err != nil {
+		return nil, err
+	}
+	if model == "" {
+		return nil, fmt.Errorf("model is required for ensemble requests")
+	}
+	for _, c := range model {
+		if c == ',' {
+			return nil, fmt.Errorf("exactly one model is supported for ensemble requests")
+		}
+	}
+	return &EnsembleRequest{location: loc, model: model}, nil
+}
+
+// WithLocation sets the location from an existing Location struct.
+func (r *EnsembleRequest) WithLocation(loc Location) *EnsembleRequest {
+	r.location = loc
+	return r
+}
+
+// WithHourly adds hourly metrics to the request.
+func (r *EnsembleRequest) WithHourly(metrics ...HourlyMetric) *EnsembleRequest {
+	r.hourlyMetrics = append(r.hourlyMetrics, metrics...)
+	return r
+}
+
+// WithDaily adds daily metrics to the request.
+func (r *EnsembleRequest) WithDaily(metrics ...DailyMetric) *EnsembleRequest {
+	r.dailyMetrics = append(r.dailyMetrics, metrics...)
+	return r
+}
+
+// WithTemperatureUnit sets the temperature unit for the response.
+func (r *EnsembleRequest) WithTemperatureUnit(unit TemperatureUnit) *EnsembleRequest {
+	r.temperatureUnit = unit
+	return r
+}
+
+// WithWindSpeedUnit sets the wind speed unit for the response.
+func (r *EnsembleRequest) WithWindSpeedUnit(unit WindSpeedUnit) *EnsembleRequest {
+	r.windSpeedUnit = unit
+	return r
+}
+
+// WithPrecipitationUnit sets the precipitation unit for the response.
+func (r *EnsembleRequest) WithPrecipitationUnit(unit PrecipitationUnit) *EnsembleRequest {
+	r.precipitationUnit = unit
+	return r
+}
+
+// WithTimezone sets the timezone for the response.
+func (r *EnsembleRequest) WithTimezone(tz string) *EnsembleRequest {
+	r.timezone = tz
+	return r
+}
+
+// WithForecastDays sets the forecast day count. The Ensemble API currently
+// supports 0-35; validation remains server-side.
+func (r *EnsembleRequest) WithForecastDays(days int) *EnsembleRequest {
+	r.forecastDays = &days
+	return r
+}
+
+// WithPastDays sets the number of past days to include.
+func (r *EnsembleRequest) WithPastDays(days int) *EnsembleRequest {
+	r.pastDays = &days
+	return r
+}
+
+// WithForecastHours sets the number of forecast hours.
+func (r *EnsembleRequest) WithForecastHours(hours int) *EnsembleRequest {
+	r.forecastHours = &hours
+	return r
+}
+
+// WithPastHours sets the number of past hours to include.
+func (r *EnsembleRequest) WithPastHours(hours int) *EnsembleRequest {
+	r.pastHours = &hours
+	return r
+}
+
+// WithDateRange sets a specific date range for the forecast.
+func (r *EnsembleRequest) WithDateRange(startDate, endDate string) *EnsembleRequest {
+	r.startDate, r.endDate = startDate, endDate
+	return r
+}
+
+// WithHourRange sets a specific hour range for the forecast.
+func (r *EnsembleRequest) WithHourRange(startHour, endHour string) *EnsembleRequest {
+	r.startHour, r.endHour = startHour, endHour
+	return r
+}
+
+// WithCellSelection sets the grid-cell selection preference.
+func (r *EnsembleRequest) WithCellSelection(selection CellSelection) *EnsembleRequest {
+	r.cellSelection = selection
+	return r
+}
+
+// WithTilt sets the tilt angle for global_tilted_irradiance calculations.
+func (r *EnsembleRequest) WithTilt(degrees float64) *EnsembleRequest {
+	r.tilt = &degrees
+	return r
+}
+
+// WithAzimuth sets the azimuth angle for global_tilted_irradiance calculations.
+func (r *EnsembleRequest) WithAzimuth(degrees float64) *EnsembleRequest {
+	r.azimuth = &degrees
+	return r
+}
+
 // ForecastRequest represents a request to the Forecast API.
 type ForecastRequest struct {
 	location Location

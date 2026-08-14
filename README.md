@@ -1,6 +1,6 @@
 # omgo - Open-Meteo Go Client
 
-A Go client for the [Open-Meteo](https://open-meteo.com) weather API. Supports weather forecasts and historical data. Outputs are typed and can handle all available metrics as of December 2025.
+A Go client for the [Open-Meteo](https://open-meteo.com) weather API. Supports forecasts, historical data, and ensemble forecasts through the library's typed metric catalog.
 
 > [!IMPORTANT]
 > v0.2.x is a significant refactor of v0.1.x and not backwards compatible. Once stable, this is likely to be promoted to v1.0.0. Please see the migration guide at the bottom of this readme.
@@ -57,6 +57,7 @@ func main() {
 - **Builder pattern**: Fluent API for building requests
 - **15-minutely data**: High-resolution data for supported regions
 - **Historical data**: Access to historical weather archives
+- **Ensemble forecasts**: Dynamic members from one Ensemble API model per request
 - **Units**: Full control over temperature, wind speed, and precipitation units
 
 ## Usage Examples
@@ -179,6 +180,38 @@ The library's existing non-nullable typed slices decode those values as zero
 series. Unit fields describe `PrimaryModel` only and may be `"undefined"` for
 unsupported model-variable combinations.
 
+### Ensemble Forecasts
+
+Deterministic multi-model forecasts above use `WithModels` and `*ByModel`.
+Ensembles are distinct: construct one `EnsembleRequest` with exactly one
+ensemble model and read its dynamically discovered `*ByMember` maps.
+
+```go
+req, err := omgo.NewEnsembleRequest(52.52, 13.41, "icon_seamless")
+if err != nil {
+    // handle error
+}
+req.WithHourly(omgo.HourlyTemperature2m).
+    WithDaily(omgo.DailyTemperature2mMax).
+    WithTimezone("Europe/Berlin")
+
+weather, err := client.Ensemble(context.Background(), req)
+if err != nil {
+    // handle error
+}
+member0 := weather.HourlyByMember["member00"]
+member1 := weather.HourlyByMember["member01"]
+fmt.Println(member0.Temperature2m[0], member1.Temperature2m[0])
+```
+
+`member00` represents unsuffixed member-valued series; member counts vary by
+model, and hourly and daily members are discovered independently. Calculated
+fields such as `is_day`, sunrise, sunset, and daylight duration are shared with
+each normalized member. This first Ensemble API surface accepts one model per
+request. As with other omgo responses, unavailable values returned as null are
+decoded as zero values by the existing non-nullable typed slices; a field whose
+entire JSON value is null remains a nil slice.
+
 ### Historical Data
 
 ```go
@@ -210,7 +243,16 @@ fmt.Printf("Temperature: %.1f%s\n",
 
 ```go
 client := omgo.NewClient(
-    omgo.WithForecastURL("https://api.open-meteo.com/v1/forecast"),
+    omgo.WithForecastURL("https://customer-api.open-meteo.com/v1/forecast"),
+    omgo.WithAPIKey("your-api-key"),
+)
+```
+
+For commercial Ensemble API access, configure its endpoint explicitly too:
+
+```go
+client := omgo.NewClient(
+    omgo.WithEnsembleURL("https://customer-ensemble-api.open-meteo.com/v1/ensemble"),
     omgo.WithAPIKey("your-api-key"),
 )
 ```
